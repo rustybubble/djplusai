@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "djplusai"
+version = "0.1.0"
+description = "Let AI agents DJ with Mixxx: natural-language mixing, lyric-cued loops and beatmatched transitions."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "rapidfuzz>=3.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# Talk to a real Mixxx instance over (virtual) MIDI.
+midi = ["python-rtmidi>=1.5"]
+# Expose the DJ tools to MCP clients (Claude Desktop, Claude Code, Cursor, ...).
+mcp = ["mcp>=2.2"]
+# Natural-language chat CLI powered by Claude.
+agent = ["anthropic>=1.0"]
+# Type into Mixxx's library search on platforms without xdotool/osascript.
+keyboard = ["pynput>=1.7"]
+# Energy, intro/outro, drops and breakdowns from the audio (plus ffmpeg for non-WAV files).
+analysis = ["numpy>=1.24"]
+# Word-accurate lyric timing from the audio itself.
+align = ["faster-whisper>=1.0"]
+all = ["djplusai[midi,mcp,agent,keyboard,analysis]"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+djplusai = "djplusai.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+djplusai = ["mixxx_mapping/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
