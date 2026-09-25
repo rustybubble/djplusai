@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MixxxControllerPreset mixxxVersion="2.4.0+" schemaVersion="1">
+  <info>
+    <name>DJPlusAI Bridge</name>
+    <author>djplusai</author>
+    <description>Lets AI agents control Mixxx through the djplusai bridge (JSON over SysEx on a virtual MIDI port). Select this mapping for the "DJPlusAI" MIDI device.</description>
+  </info>
+  <controller id="DJPlusAI">
+    <scriptfiles>
+      <file filename="DJPlusAI.js" functionprefix="DJPlusAI"/>
+    </scriptfiles>
+    <controls>
+      <control>
+        <group>[Master]</group>
+        <key>DJPlusAI.incomingData</key>
+        <description>JSON commands from the djplusai bridge</description>
+        <status>0xF0</status>
+        <options>
+          <Script-Binding/>
+        </options>
+      </control>
+    </controls>
+    <outputs/>
+  </controller>
+</MixxxControllerPreset>
