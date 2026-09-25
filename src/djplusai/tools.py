@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from . import music
+from . import music, youtube
 from .backends.base import MixxxError, deck_group
 from .controller import DJ, TrackNotFound
+from .library import Track
 from .jobs import JobManager, run_plan, validate_plan
 from .lyrics import instrumental_windows
 from .recommend import OpportunityWatcher, Recommender
@@ -42,8 +45,10 @@ class DJTools:
         jobs: JobManager | None = None,
         recommender: Recommender | None = None,
         watcher: OpportunityWatcher | None = None,
+        download_dir: str | Path | None = None,
     ) -> None:
         self.dj = dj
+        self.download_dir = download_dir
         self.jobs = jobs or JobManager()
         self.rec = recommender or Recommender(dj)
         self.watcher = watcher
@@ -62,13 +67,26 @@ class DJTools:
                 "not_in_library": exc.query,
                 "where_to_get_it": exc.where_to_get_it(),
             }
-        except (MixxxError, ValueError, KeyError, TimeoutError) as exc:
+        except (MixxxError, youtube.DownloadError, ValueError, KeyError, TimeoutError) as exc:
             return {"error": str(exc)}
         return result if isinstance(result, dict) else {"result": result}
 
     async def call_json(self, name: str, args: dict[str, Any] | None) -> tuple[str, bool]:
         res = await self.call(name, args)
         return json.dumps(res, ensure_ascii=False), "error" in res
+
+    def _library_track_for(self, path: Path, source: dict[str, Any]) -> Track | None:
+        """The loadable library track for a downloaded file, if Mixxx has it (or we can add it)."""
+        lib = self.dj.library
+        track = lib.find_by_location(path)
+        if track is None:
+            self.dj.reload_library()  # Mixxx may have scanned it since we last looked
+            track = lib.find_by_location(path)
+        if track is None:
+            track = lib.add_file(
+                path, source.get("artist") or "", source.get("title") or path.stem, float(source.get("duration") or 0)
+            )
+        return track
 
     # --------------------------------------------------------------- handlers
     def _build(self) -> list[Tool]:
@@ -110,6 +128,65 @@ class DJTools:
         )
         async def load_track(a: dict[str, Any]) -> dict[str, Any]:
             return await dj.load(a["deck"], a.get("query"), a.get("track_id"), bool(a.get("play", False)))
+
+        @tool(
+            "search_youtube",
+            "Search YouTube for a song to add to the library. Returns the top results numbered from 1 (default 3) "
+            "with title, channel, duration and url; show them as a numbered list and pass the chosen url to "
+            "add_from_youtube.",
+            _obj({"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}}, ["query"]),
+        )
+        async def search_youtube(a: dict[str, Any]) -> dict[str, Any]:
+            results = await asyncio.to_thread(youtube.search_tracks, a["query"], int(a.get("limit", 3)))
+            out = []
+            for n, r in enumerate(results, 1):
+                item: dict[str, Any] = {
+                    "n": n,
+                    "title": r.title,
+                    "channel": r.uploader,
+                    "duration": youtube.format_duration(r.duration) if r.duration is not None else None,
+                    "url": r.url,
+                }
+                cached = youtube.find_cached(r.video_id, self.download_dir)
+                if cached:
+                    item["already_downloaded"] = str(cached)
+                out.append(item)
+            return {"query": a["query"], "results": out}
+
+        @tool(
+            "add_from_youtube",
+            "Add a YouTube video's audio to the library as a tagged 320 kbps MP3 (an earlier download of the "
+            "same video is reused). Give deck (and play) to load it straight away once it is in the library.",
+            _obj({"url": {"type": "string"}, "deck": DECK,
+                  "play": {"type": "boolean", "description": "Start playing after loading."}}, ["url"]),
+        )
+        async def add_from_youtube(a: dict[str, Any]) -> dict[str, Any]:
+            if a.get("deck") is not None:
+                dj.check_deck(a["deck"])
+            already = youtube.find_cached(a["url"], self.download_dir) is not None
+            path = await asyncio.to_thread(youtube.download_track, a["url"], self.download_dir)
+            source = youtube.read_source(path) or {}
+            out: dict[str, Any] = {
+                "file": str(path),
+                "artist": source.get("artist"),
+                "title": source.get("title") or path.stem,
+                "duration_s": source.get("duration"),
+                "already_downloaded": already,
+            }
+            track = self._library_track_for(path, source)
+            if track is None:
+                out["in_mixxx_library"] = False
+                out["next_step"] = (
+                    f"Mixxx has not scanned this file yet. Make sure {path.parent} is one of Mixxx's library "
+                    "folders (Preferences > Library), run Library > Rescan Library in Mixxx, then call "
+                    "reload_library and load_track."
+                )
+                return out
+            out["in_mixxx_library"] = True
+            out["track"] = track.brief()
+            if a.get("deck") is not None:
+                out["load"] = await dj.load(a["deck"], track_id=track.id, play=bool(a.get("play", False)))
+            return out
 
         @tool(
             "suggest_next_tracks",

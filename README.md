@@ -78,10 +78,42 @@ Title drop into Money On The Line"*, and it runs if you say "do it".
 The techniques and research sources are in
 [docs/transition-techniques.md](docs/transition-techniques.md).
 
-**Songs you don't have:** djplusai only plays music in your Mixxx library. If you ask for a
-missing track, it says so and gives links to buy or stream it (Bandcamp, Beatport, Apple Music,
-Amazon, Spotify). After you add the file to Mixxx and rescan, `reload_library` picks it up.
-Lyrics are fetched automatically when a track loads.
+**Songs you don't have:** djplusai plays music from your Mixxx library. If you ask for a
+missing track, it says so and offers to find it on YouTube, or gives links to buy or stream it
+(Bandcamp, Beatport, Apple Music, Amazon, Spotify). Lyrics are fetched automatically when a
+track loads.
+
+## Adding songs from YouTube
+
+The same chat can pull a song from YouTube into your library:
+
+```
+you> !search gods plan
+dj>  1. God's Plan - Drake (3:19)
+     2. ...
+     3. ...
+you> 1
+dj>  Added Drake - God's Plan: ~/dj-library/downloads/Drake - God's Plan.mp3
+you> !add https://youtube.com/watch?v=...
+you> find gods plan on youtube and put it on deck 2
+```
+
+`add_from_youtube` saves the best audio stream as a **320 kbps MP3** tagged with title,
+artist and duration, in `~/dj-library/downloads/` (change it with `DJPLUSAI_DOWNLOAD_DIR`).
+Next to each MP3 is a `.source` file with the original URL and video id, so asking for the same
+video again, in any URL form, reuses the file instead of downloading it again.
+
+Setup:
+
+1. Install the extra: `pip install -e ".[youtube]"` (included in `.[all]`).
+2. Install **ffmpeg**, which also provides ffprobe: `brew install ffmpeg`, `sudo apt install ffmpeg`
+   or `winget install ffmpeg`. If ffmpeg isn't on `PATH`, set `FFMPEG_PATH`. Without it, the tool
+   says how to install it.
+3. In Mixxx, add `~/dj-library/downloads` as a library folder (*Preferences → Library*).
+
+Mixxx only loads tracks it has scanned. After a download, run *Library → Rescan Library* in Mixxx
+and tell the chat, which calls `reload_library` and loads the track. In the simulator (`--sim`), downloads
+are added to the library straight away.
 
 ## Try it without Mixxx
 
@@ -155,6 +187,7 @@ djplusai call set_volume '{"target": "master", "change": 0.1}'
 | `recommend_transitions`, `run_idea` | Ranked transition ideas from the songs themselves (wordplay, harmonic, energy, tempo, structure), then carry one out |
 | `get_opportunities` | Lyric moments coming up that set up a great transition right now |
 | `get_lyrics`, `analyze_track` | Lyrics with timestamps and vocal-free windows; audio energy, intro, outro, drops |
+| `search_youtube`, `add_from_youtube` | Find a song on YouTube and add it as a tagged 320 kbps MP3, optionally loading it on a deck |
 | `reload_library` | Pick up music added to Mixxx since startup |
 | `raw_control` | Escape hatch to any [Mixxx control](https://manual.mixxx.org/latest/en/chapters/appendix/mixxx_controls) |
 
@@ -193,7 +226,8 @@ for word-level timing.
   step uses keyboard automation. Mixxx is briefly brought to the front, and the search does not
   work on pure Wayland sessions without an X11 or Xwayland window. If typing is unavailable,
   djplusai reports which track to load by hand.
-- **Only tracks in your Mixxx library.** djplusai does not download music.
+- **New downloads need a Mixxx rescan.** Mixxx has no control for adding or rescanning files,
+  so after `add_from_youtube` you run *Library → Rescan Library* once before the track can load.
 - **Lyrics can't tell who is singing.** In "when Drake says…", the lyric search finds the word
   itself, not the performer.
 - **Transitions use each deck's volume fader.** The crossfader is left alone unless you ask.
