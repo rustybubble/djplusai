@@ -143,6 +143,13 @@ DJPlusAI.execute = function(msg) {
     case "cancel_ramps":
         DJPlusAI.cancelRamps(msg.g);
         return undefined;
+    case "brake":
+        // Turntable power-down: Mixxx slows the deck to a stop.
+        engine.brake(msg.n, msg.on !== false, msg.factor || 1.0);
+        return undefined;
+    case "spinback":
+        engine.spinback(msg.n, msg.on !== false, msg.factor || 1.8, msg.rate || -10.0);
+        return undefined;
     case "state":
         return DJPlusAI.fullState();
     case "config":

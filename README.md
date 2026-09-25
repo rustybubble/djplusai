@@ -51,6 +51,38 @@ how fast the AI reacts.
 such as "until the loop engages" or "for 8 beats"). djplusai runs the steps in real time while
 you keep talking.
 
+## Transition recommendations and live wordplay
+
+djplusai can suggest *how* to get from one song to the next, based on the songs themselves. It
+looks at the lyrics, tempo, key, energy and, optionally, the audio structure. The ideas it can
+suggest:
+
+- Wordplay:
+  - **title drops**: the playing song sings the next song's title;
+  - **handoffs**: both songs sing the same phrase;
+  - **name drops**: the lyrics mention the next artist.
+- **Remix flips**.
+- **Vocal rides**, a live mashup over the next song's intro.
+- **Harmonic blends** in the vocal-free outro.
+- Camelot **energy boosts**.
+- **Double drops**.
+- **Half-time bridges** and **tempo rides**.
+- **Echo out, spinback or brake** exits when two records won't blend.
+
+Every idea comes with the reason, the moment it happens and a ready plan to run.
+
+While music plays, an **opportunity watcher** reads ahead in the lyrics. Suppose the song is about
+to sing the title of another track in your library. The chat tells you something like *"in 14 s:
+Title drop into Money On The Line"*, and it runs if you say "do it".
+
+The techniques and research sources are in
+[docs/transition-techniques.md](docs/transition-techniques.md).
+
+**Songs you don't have:** djplusai only plays music in your Mixxx library. If you ask for a
+missing track, it says so and gives links to buy or stream it (Bandcamp, Beatport, Apple Music,
+Amazon, Spotify). After you add the file to Mixxx and rescan, `reload_library` picks it up.
+Lyrics are fetched automatically when a track loads.
+
 ## Try it without Mixxx
 
 ```bash
@@ -118,8 +150,12 @@ djplusai call set_volume '{"target": "master", "change": 0.1}'
 | `set_tempo` | BPM or percent change, sync to another deck, keylock |
 | `loop` | Loop now, at a time, or **at a lyric**; release |
 | `find_lyric` | Every time a word or phrase is sung, with timestamps |
-| `recommend_transition`, `transition` | Crossfade, bass swap, filter sweep, echo out, cut; beat-aligned, background by default |
-| `run_mix_plan`, `list_jobs`, `cancel_job` | Timed sequences with waits on lyrics, beats, loop engagement, position, time left |
+| `recommend_transition`, `transition` | Crossfade, bass swap, filter sweep, echo out, cut, spinback, brake; beat-aligned, background by default |
+| `run_mix_plan`, `list_jobs`, `cancel_job` | Timed sequences with waits on lyrics, beats, phrases, loop engagement, position, time left |
+| `recommend_transitions`, `run_idea` | Ranked transition ideas from the songs themselves (wordplay, harmonic, energy, tempo, structure), then carry one out |
+| `get_opportunities` | Lyric moments coming up that set up a great transition right now |
+| `get_lyrics`, `analyze_track` | Lyrics with timestamps and vocal-free windows; audio energy, intro, outro, drops |
+| `reload_library` | Pick up music added to Mixxx since startup |
 | `raw_control` | Escape hatch to any [Mixxx control](https://manual.mixxx.org/latest/en/chapters/appendix/mixxx_controls) |
 
 The example at the top turns into:
@@ -181,5 +217,6 @@ The test suite covers the following:
 
 Layout: `src/djplusai/mixxx_mapping/` (Mixxx side), `backends/` (`midi.py` for real Mixxx,
 `sim.py` for the simulator), `controller.py` (DJ operations), `transitions.py`, `jobs.py` (mix
-plans), `lyrics.py`, `library.py`, `music.py`, `tools.py` (tool schemas), `mcp_server.py`,
+plans), `recommend.py` (transition ideas and the opportunity watcher), `analysis.py` (audio
+structure), `lyrics.py`, `library.py`, `music.py`, `tools.py` (tool schemas), `mcp_server.py`,
 `agent.py`, `cli.py`.

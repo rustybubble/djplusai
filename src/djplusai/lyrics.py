@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,44 @@ def parse_lrc(text: str, source: str = "lrc") -> Lyrics:
     return Lyrics(lines=lines, source=source, synced=bool(lines))
 
 
+def parse_plain(text: str, source: str = "plain") -> Lyrics:
+    """Unsynced lyrics: the words without timestamps (good for wordplay, not for timing)."""
+    lines = [LyricLine(time=-1.0, text=ln.strip()) for ln in text.splitlines() if ln.strip()]
+    return Lyrics(lines=lines, source=source, synced=False)
+
+
+def vocal_spans(lyrics: Lyrics) -> list[tuple[float, float]]:
+    """Merged (start, end) intervals where vocals are sung, from synced lyrics."""
+    if not lyrics.synced:
+        return []
+    spans: list[tuple[float, float]] = []
+    for i, line in enumerate(lyrics.lines):
+        if not line.text.strip():
+            continue
+        start = line.time
+        end = line.time + (lyrics.line_end(i) - line.time) * SUNG_FRACTION
+        if spans and start <= spans[-1][1] + 2.0:  # a breath between lines is still one vocal section
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((start, end))
+    return spans
+
+
+def instrumental_windows(lyrics: Lyrics, duration: float, min_len: float = 8.0) -> list[tuple[float, float]]:
+    """Gaps of at least ``min_len`` seconds without vocals (intro, breaks, outro)."""
+    if not lyrics.synced or duration <= 0:
+        return []
+    windows = []
+    cursor = 0.0
+    for start, end in vocal_spans(lyrics):
+        if start - cursor >= min_len:
+            windows.append((cursor, start))
+        cursor = max(cursor, end)
+    if duration - cursor >= min_len:
+        windows.append((cursor, duration))
+    return windows
+
+
 def _norm_tokens(text: str) -> list[str]:
     text = text.lower().replace("'", "").replace("’", "")
     return re.findall(r"[a-z0-9$]+", text)
@@ -139,7 +178,7 @@ def _match_in_line(phrase: list[str], line: list[str]) -> list[tuple[int, float]
 def find_phrase(lyrics: Lyrics, phrase: str, after: float | None = None) -> list[LyricHit]:
     """All occurrences of ``phrase``, in time order (optionally only those after ``after``)."""
     ptoks = _norm_tokens(phrase)
-    if not ptoks:
+    if not ptoks or not lyrics.synced:
         return []
     hits: list[LyricHit] = []
     for idx, line in enumerate(lyrics.lines):
@@ -190,6 +229,7 @@ class LyricsProvider:
         self.use_lrclib = use_lrclib
         self.timeout = timeout
         self._mem: dict[int | str, Lyrics | None] = {}
+        self._misses: dict[int | str, float] = {}  # cached() lookups that found nothing, and when
 
     def _key(self, track: Track) -> str:
         return re.sub(r"[^\w.-]+", "_", f"{track.artist} - {track.title}")[:150]
@@ -221,7 +261,29 @@ class LyricsProvider:
                         return lyr
             except OSError:
                 continue
+        if self.cache_dir:
+            plain = self.cache_dir / f"{self._key(track)}.txt"
+            try:
+                if plain.is_file():
+                    return parse_plain(plain.read_text(encoding="utf-8", errors="replace"), source=str(plain))
+            except OSError:
+                pass
         return None
+
+    def cached(self, track: Track) -> Lyrics | None:
+        """Lyrics already fetched or on disk, without touching the network."""
+        mem_key = track.id if track.id else track.display
+        if mem_key in self._mem:
+            return self._mem[mem_key]
+        now = time.monotonic()
+        if now - self._misses.get(mem_key, -1e9) < 60:
+            return None  # checked the disk recently; don't stat thousands of files every scan
+        lyr = self._from_files(track)
+        if lyr is not None:
+            self._mem[mem_key] = lyr
+        else:
+            self._misses[mem_key] = now
+        return lyr
 
     async def _from_lrclib(self, track: Track) -> Lyrics | None:
         headers = {"User-Agent": "djplusai (https://github.com/rustybubble/djplusai)"}
@@ -234,7 +296,7 @@ class LyricsProvider:
                     params["duration"] = int(round(track.duration))
                 r = await client.get(f"{self.LRCLIB}/get", params=params)
                 data = r.json() if r.status_code == 200 else None
-                if not data or not data.get("syncedLyrics"):
+                if not data or not (data.get("syncedLyrics") or data.get("plainLyrics")):
                     r = await client.get(
                         f"{self.LRCLIB}/search", params={"q": f"{track.artist} {track.title}"}
                     )
@@ -243,13 +305,20 @@ class LyricsProvider:
         except (httpx.HTTPError, json.JSONDecodeError, ValueError) as exc:
             log.warning("LRCLIB lookup failed for %s: %s", track.display, exc)
             return None
-        if not data or not data.get("syncedLyrics"):
+        if not data:
             return None
-        lyr = parse_lrc(data["syncedLyrics"], source="lrclib.net")
+        if data.get("syncedLyrics"):
+            text, lyr = data["syncedLyrics"], parse_lrc(data["syncedLyrics"], source="lrclib.net")
+            suffix = ".lrc"
+        elif data.get("plainLyrics"):
+            text, lyr = data["plainLyrics"], parse_plain(data["plainLyrics"], source="lrclib.net (unsynced)")
+            suffix = ".txt"
+        else:
+            return None
         if self.cache_dir:
             try:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
-                (self.cache_dir / f"{self._key(track)}.lrc").write_text(data["syncedLyrics"], encoding="utf-8")
+                (self.cache_dir / f"{self._key(track)}{suffix}").write_text(text, encoding="utf-8")
             except OSError:
                 pass
         return lyr
@@ -258,7 +327,7 @@ class LyricsProvider:
     def _best_search_result(track: Track, results: list[dict[str, Any]]) -> dict[str, Any] | None:
         best, best_score = None, 0.0
         for res in results or []:
-            if not res.get("syncedLyrics"):
+            if not (res.get("syncedLyrics") or res.get("plainLyrics")):
                 continue
             s = fuzz.token_set_ratio(
                 f"{track.artist} {track.title}".lower(),
@@ -268,6 +337,8 @@ class LyricsProvider:
                 # Different edits (radio / clean / extended) have different timings.
                 if abs(float(res["duration"]) - track.duration) > 3:
                     s -= 30
+            if not res.get("syncedLyrics"):
+                s -= 10  # usable for wordplay, but no timing
             if s > best_score:
                 best, best_score = res, s
         return best if best_score >= 70 else None

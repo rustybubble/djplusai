@@ -141,3 +141,11 @@ def test_state_push_with_non_ascii_metadata(script):
     msgs = script.send({"tick": 9})
     assert {m["n"] for m in msgs if m.get("t") == "deck"} == {1, 2, 3, 4}
     assert any(m.get("t") == "master" for m in msgs)
+
+
+def test_brake_and_spinback_call_mixxx(script):
+    script.request({"id": 1, "op": "brake", "n": 1, "factor": 1.0})
+    script.request({"id": 2, "op": "spinback", "n": 2, "on": True})
+    controls = [m for m in script.send({"dump": True}) if "controls" in m][0]["controls"]
+    assert controls["brake,1"] == [True, 1.0]
+    assert controls["spinback,2"] == [True, 1.8, -10.0]

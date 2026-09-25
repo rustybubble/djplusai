@@ -116,7 +116,8 @@ async def test_volume_eq_filter_tempo_tools(rt):
 
 async def test_errors_are_reported_not_raised(rt):
     res = await rt.tools.call("load_track", {"deck": 1, "query": "zzzz nonexistent qqqq"})
-    assert "nothing in the Mixxx library" in res["error"]
+    assert "not in your Mixxx library" in res["error"]
+    assert res["where_to_get_it"]["bandcamp"].startswith("https://bandcamp.com/search?q=zzzz")
     res = await rt.tools.call("run_mix_plan", {"steps": [{"wait": {"lyric": "x"}}]})
     assert "needs a deck" in res["error"]
     await call(rt, "load_track", deck=1, query="Amen Rider", play=True)

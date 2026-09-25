@@ -14,7 +14,7 @@ from . import music
 from .backends.base import MixxxError, deck_group
 from .controller import DJ
 
-STYLES = ("crossfade", "bass_swap", "filter_sweep", "echo_out", "cut")
+STYLES = ("crossfade", "bass_swap", "filter_sweep", "echo_out", "cut", "spinback", "brake")
 
 Log = Callable[[str], None]
 
@@ -56,7 +56,7 @@ async def transition(
     if style not in STYLES:
         raise MixxxError(f"style must be one of {', '.join(STYLES)} or auto")
     if bars is None:
-        bars = rec["bars"] if style == rec["style"] else {"cut": 0, "echo_out": 2, "filter_sweep": 8}.get(style, 8)
+        bars = rec["bars"] if style == rec["style"] else {"cut": 0, "spinback": 0, "brake": 0, "echo_out": 2, "filter_sweep": 8}.get(style, 8)
     if sync is None:
         sync = rec["sync"]
 
@@ -71,7 +71,7 @@ async def transition(
     await b.set(gn, "quantize", 1)
     if sync and da.playing:
         await dj.set_sync(n, True, leader=a)
-    if style != "cut":
+    if style not in ("cut", "spinback", "brake"):
         await b.set(gn, "volume", 0.0)
     log(f"{style} deck {a} -> deck {n} over {bars} bars ({total_s:.1f}s), sync={sync}")
 
@@ -83,6 +83,8 @@ async def transition(
         "filter_sweep": _filter_sweep,
         "echo_out": _echo_out,
         "cut": _cut,
+        "spinback": _spinback,
+        "brake": _brake,
     }
     await runner[style](dj, a, n, total_s, beat_s, target_volume)
 
@@ -92,6 +94,8 @@ async def transition(
     if release_loop:
         await dj.loop_off(a)
     await b.cancel_ramps(ga)
+    if style in ("spinback", "brake"):
+        await getattr(b, style)(a, on=False)
     await b.batch(
         [{"op": "set", "g": f"[EqualizerRack1_{ga}_Effect1]", "k": f"parameter{i}", "v": 1.0} for i in (1, 2, 3)]
         + [{"op": "set", "g": f"[QuickEffectRack1_{ga}]", "k": "super1", "v": 0.5},
@@ -164,5 +168,30 @@ async def _cut(dj: DJ, a: int, n: int, total: float, beat: float, vol: float) ->
             {"op": "set", "g": deck_group(n), "k": "volume", "v": vol},
             {"op": "set", "g": deck_group(n), "k": "play", "v": 1},
             {"op": "set", "g": deck_group(a), "k": "volume", "v": 0.0},
+        ]
+    )
+
+
+async def _spinback(dj: DJ, a: int, n: int, total: float, beat: float, vol: float) -> None:
+    """Whip the outgoing record backwards, then drop the new one as the spin dies."""
+    await dj.backend.spinback(a)
+    await dj.backend.sleep(0.55)
+    await dj.backend.batch(
+        [
+            {"op": "set", "g": deck_group(n), "k": "volume", "v": vol},
+            {"op": "set", "g": deck_group(n), "k": "play", "v": 1},
+        ]
+    )
+    await dj.backend.sleep(0.4)
+
+
+async def _brake(dj: DJ, a: int, n: int, total: float, beat: float, vol: float) -> None:
+    """Power the outgoing turntable down, then kick the new track in."""
+    await dj.backend.brake(a, factor=1.0)
+    await dj.backend.sleep(1.2)
+    await dj.backend.batch(
+        [
+            {"op": "set", "g": deck_group(n), "k": "volume", "v": vol},
+            {"op": "set", "g": deck_group(n), "k": "play", "v": 1},
         ]
     )

@@ -29,12 +29,24 @@ into Rollie by Ayo & Teo":
      {"wait": {"deck": 1, "beats": 8}}              # let the loop repeat twice
      {"tool": "transition", "args": {"from_deck": 1, "to_deck": 2, "style": "echo_out", "bars": 2}}
 
+Recommendations and live opportunities
+- recommend_transitions looks at both songs (lyrics, tempo, key, energy, structure) and returns ranked ideas:
+  title drops, wordplay handoffs, name drops, remix flips, vocal rides, harmonic blends, energy boosts, double
+  drops, half-time bridges, tempo rides and clean exits. Each has an id: run it with run_idea. Explain the "why"
+  in a sentence when you suggest one.
+- While music plays, get_status lists "opportunities": lyric moments coming up that set up a great transition
+  (e.g. the song is about to sing another track's title). When one is a few seconds to a couple of minutes away,
+  offer it proactively and run it if the listener agrees.
+- If a requested song is not in the library, say so and share the where_to_get_it links from the tool result.
+  After they add it to Mixxx and rescan, call reload_library.
+
 Transitions (genre-aware; use recommend_transition when unsure)
 - crossfade: general purpose (pop, rock, disco, Latin); 8-16 bars.
 - bass_swap: house/techno/DnB; long blends of 8-32 bars with the bass swapped half-way.
 - filter_sweep: build tension, good for EDM and when keys clash; 8-16 bars.
 - echo_out: hip-hop, R&B, trap, and big tempo differences; 1-4 bars, the new track drops cleanly.
 - cut: instant switch on the beat; genre changes or dramatic drops.
+- spinback / brake: turntable spinback or power-down; dramatic exits across any tempo gap.
 - Beatmatch (sync) only when tempos are within about 8% (half/double time counts). Otherwise use echo_out
   or cut without sync. Harmonic mixing: Camelot neighbours (same number, or +/-1 with the same letter) blend
   best; keep overlaps short when keys clash.

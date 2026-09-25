@@ -12,6 +12,7 @@ or a wait::
     {"wait": {"deck": 1, "loop_active": true}}        # until the armed loop engages
     {"wait": {"deck": 1, "remaining_s": 30}}          # until 30 s before the end
     {"wait": {"deck": 1, "next_bar": true}}           # to the next bar boundary
+    {"wait": {"deck": 1, "next_phrase": true}}        # to the next 32-beat phrase
     {"wait": {"seconds": 4}}                          # plain delay
 
 Plans run in the background so the agent (and the user) can keep talking while
@@ -107,7 +108,7 @@ class JobManager:
         return job
 
 
-WAIT_KEYS = {"seconds", "position_s", "lyric", "beats", "loop_active", "remaining_s", "next_bar", "next_beat"}
+WAIT_KEYS = {"seconds", "position_s", "lyric", "beats", "loop_active", "remaining_s", "next_bar", "next_beat", "next_phrase"}
 
 
 def validate_plan(steps: list[dict[str, Any]], tool_names: set[str]) -> None:
@@ -152,6 +153,8 @@ async def run_wait(dj: DJ, w: dict[str, Any]) -> str:
         ok = await dj.wait_for_loop(deck, bool(w["loop_active"]), timeout)
     elif "remaining_s" in w:
         ok = await dj.wait_for_remaining(deck, float(w["remaining_s"]), timeout)
+    elif "next_phrase" in w:
+        ok = await dj.wait_for_next_phrase(deck, int(w.get("phrase_beats", 32)), timeout)
     elif "next_bar" in w:
         ok = await dj.wait_for_next_beat(deck, every=4)
     elif "next_beat" in w:

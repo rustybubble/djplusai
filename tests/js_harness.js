@@ -40,6 +40,8 @@ const engine = {
         delete timers[id];
     },
     getPlayer: (g) => ({artist: "Björk " + g, title: "Jóga", key: "8A"}),
+    brake: (deck, on, factor) => { controls["brake," + deck] = [on, factor]; },
+    spinback: (deck, on, factor, rate) => { controls["spinback," + deck] = [on, factor, rate]; },
 };
 const midi = {sendSysexMsg: (bytes, len) => out({out: bytes.slice(0, len)})};
 

@@ -9,8 +9,10 @@ from typing import Any, Awaitable, Callable
 
 from . import music
 from .backends.base import MixxxError, deck_group
-from .controller import DJ
+from .controller import DJ, TrackNotFound
 from .jobs import JobManager, run_plan, validate_plan
+from .lyrics import instrumental_windows
+from .recommend import OpportunityWatcher, Recommender
 from .transitions import STYLES, transition
 
 log = logging.getLogger(__name__)
@@ -34,9 +36,17 @@ class Tool:
 
 
 class DJTools:
-    def __init__(self, dj: DJ, jobs: JobManager | None = None) -> None:
+    def __init__(
+        self,
+        dj: DJ,
+        jobs: JobManager | None = None,
+        recommender: Recommender | None = None,
+        watcher: OpportunityWatcher | None = None,
+    ) -> None:
         self.dj = dj
         self.jobs = jobs or JobManager()
+        self.rec = recommender or Recommender(dj)
+        self.watcher = watcher
         self.tools: dict[str, Tool] = {t.name: t for t in self._build()}
 
     # ----------------------------------------------------------------- calling
@@ -46,6 +56,12 @@ class DJTools:
             return {"error": f"unknown tool {name}"}
         try:
             result = await tool.handler(dict(args or {}))
+        except TrackNotFound as exc:
+            return {
+                "error": str(exc),
+                "not_in_library": exc.query,
+                "where_to_get_it": exc.where_to_get_it(),
+            }
         except (MixxxError, ValueError, KeyError, TimeoutError) as exc:
             return {"error": str(exc)}
         return result if isinstance(result, dict) else {"result": result}
@@ -70,6 +86,11 @@ class DJTools:
         async def get_status(_: dict[str, Any]) -> dict[str, Any]:
             st = await dj.status()
             st["jobs"] = self.jobs.list(include_finished=False)
+            if self.watcher and self.watcher.current:
+                st["opportunities"] = [
+                    {k: i.as_dict()[k] for k in ("id", "name", "why", "in_s", "incoming")}
+                    for i in self.watcher.current[:3]
+                ]
             return st
 
         @tool(
@@ -313,6 +334,128 @@ class DJTools:
             ids = self.jobs.cancel(a.get("job_id"))
             await dj.backend.cancel_ramps()
             return {"cancelled": ids}
+
+        @tool(
+            "recommend_transitions",
+            "Recommend how to get from the track on from_deck into another song, based on the songs themselves: "
+            "wordplay (title drops, shared lyrics, name drops), harmonic blends, energy boosts, half-time bridges, "
+            "tempo rides, vocal rides, double drops, echo outs and more. Name a target with to_deck, track_query or "
+            "track_id; omit all three to also pick the best next tracks from the library. Each idea has an id "
+            "for run_idea, a reason, when it happens and a ready plan.",
+            _obj({"from_deck": DECK, "to_deck": DECK, "track_query": {"type": "string"}, "track_id": {"type": "integer"},
+                  "genre": {"type": "string", "description": "Only consider next tracks of this genre."},
+                  "limit": {"type": "integer", "minimum": 1, "maximum": 12}}, ["from_deck"]),
+        )
+        async def recommend_transitions(a: dict[str, Any]) -> dict[str, Any]:
+            limit = int(a.get("limit", 6))
+            target = None
+            if a.get("track_id") is not None or a.get("track_query"):
+                target = dj.resolve(a.get("track_query"), a.get("track_id"))
+            elif a.get("to_deck") is not None:
+                target = dj.deck_track(a["to_deck"])
+                if target is None:
+                    raise MixxxError(f"nothing known is loaded on deck {a['to_deck']}")
+            await dj.backend.refresh()
+            if target is not None:
+                ideas = await self.rec.for_pair(a["from_deck"], target, a.get("to_deck"), limit)
+            else:
+                ideas = await self.rec.next_moves(a["from_deck"], limit, genre=a.get("genre"))
+            return {"ideas": [i.as_dict() for i in ideas]}
+
+        @tool(
+            "get_opportunities",
+            "Transition opportunities coming up in the music right now, e.g. the playing song is about to sing "
+            "another library track's title. Sorted best first, with in_s = seconds until the moment.",
+            _obj({"horizon_s": {"type": "number", "minimum": 10, "maximum": 600}}),
+        )
+        async def get_opportunities(a: dict[str, Any]) -> dict[str, Any]:
+            await dj.backend.refresh()
+            horizon = float(a.get("horizon_s", 90))
+            ideas = []
+            for n in range(1, dj.num_decks + 1):
+                if dj.deck_state(n).playing:
+                    ideas.extend(await self.rec.opportunities(n, horizon, fetch=False))
+            ideas.sort(key=lambda i: -i.score)
+            return {"opportunities": [i.as_dict() for i in ideas[:8]]}
+
+        @tool(
+            "run_idea",
+            "Carry out a recommended transition idea (from recommend_transitions or get_opportunities) by id. "
+            "It runs in the background like run_mix_plan and loads the incoming track first if needed.",
+            _obj({"idea_id": {"type": "string"}}, ["idea_id"]),
+        )
+        async def run_idea(a: dict[str, Any]) -> dict[str, Any]:
+            idea = self.rec.ideas.get(a["idea_id"])
+            if idea is None:
+                raise MixxxError(f"unknown or expired idea {a['idea_id']}; ask for fresh recommendations")
+            validate_plan(idea.plan, set(self.tools) - {"run_mix_plan"})
+            job = self.jobs.start(
+                f"{idea.name} into {idea.incoming.title}",
+                lambda job: run_plan(dj, idea.plan, self.call, job),
+            )
+            return {"job_id": job.id, "status": "started", "idea": idea.name, "why": idea.why}
+
+        @tool(
+            "get_lyrics",
+            "The lyrics of the track on a deck, or of any library track: lines with timestamps when synced, "
+            "plus the vocal-free windows that make clean mix points.",
+            _obj({"deck": DECK, "track_query": {"type": "string"}, "track_id": {"type": "integer"}}),
+        )
+        async def get_lyrics(a: dict[str, Any]) -> dict[str, Any]:
+            if a.get("track_id") is not None or a.get("track_query"):
+                track = dj.resolve(a.get("track_query"), a.get("track_id"))
+            elif a.get("deck") is not None:
+                track = dj.deck_track(a["deck"])
+                if track is None:
+                    raise MixxxError(f"nothing known is loaded on deck {a['deck']}")
+            else:
+                raise MixxxError("give a deck, track_query or track_id")
+            lyr = await dj.lyrics.get(track)
+            if lyr is None:
+                return {"track": track.brief(), "lyrics": None, "message": "no lyrics found"}
+            lines = [
+                {"time_s": round(ln.time, 2) if lyr.synced else None, "text": ln.text}
+                for ln in lyr.lines if ln.text.strip()
+            ]
+            return {
+                "track": track.brief(),
+                "source": lyr.source,
+                "synced": lyr.synced,
+                "lines": lines[:200],
+                "instrumental_windows_s": [
+                    [round(s, 1), round(e, 1)] for s, e in instrumental_windows(lyr, track.duration)
+                ],
+            }
+
+        @tool(
+            "analyze_track",
+            "Audio structure of a track (needs numpy, and ffmpeg for non-WAV files): energy, intro end, outro "
+            "start, drops and breakdowns in seconds.",
+            _obj({"deck": DECK, "track_query": {"type": "string"}, "track_id": {"type": "integer"}}),
+        )
+        async def analyze_track(a: dict[str, Any]) -> dict[str, Any]:
+            if a.get("track_id") is not None or a.get("track_query"):
+                track = dj.resolve(a.get("track_query"), a.get("track_id"))
+            else:
+                track = dj.deck_track(a.get("deck", 1))
+            if track is None:
+                raise MixxxError("no track to analyse")
+            prof = await self.rec.profile(track)
+            return {
+                "track": track.brief(),
+                "genre_family": prof.family,
+                "energy": prof.energy,
+                "analysis": prof.analysis.to_dict() if prof.analysis else None,
+                "note": None if prof.analysis else "audio analysis unavailable (install numpy and ffmpeg, or the file is missing)",
+            }
+
+        @tool(
+            "reload_library",
+            "Re-read the Mixxx library after new music was added and Mixxx rescanned it.",
+            _obj({}),
+        )
+        async def reload_library(_: dict[str, Any]) -> dict[str, Any]:
+            return {"tracks": dj.reload_library()}
 
         @tool(
             "raw_control",

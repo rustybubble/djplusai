@@ -234,6 +234,12 @@ class Backend(abc.ABC):
     async def cancel_ramps(self, group: str | None = None) -> None:
         await self.request({"op": "cancel_ramps", "g": group})
 
+    async def brake(self, deck: int, on: bool = True, factor: float = 1.0) -> None:
+        await self.request({"op": "brake", "n": deck, "on": on, "factor": factor})
+
+    async def spinback(self, deck: int, on: bool = True, factor: float = 1.8) -> None:
+        await self.request({"op": "spinback", "n": deck, "on": on, "factor": factor})
+
     async def refresh(self) -> MixxxState:
         full = await self.request({"op": "state"})
         now = self.now()

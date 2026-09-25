@@ -9,10 +9,13 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from .analysis import Analyzer
+from .analysis import available as analysis_available
 from .backends.base import Backend
 from .controller import DJ
 from .library import Library, MixxxLibrary, Track
 from .lyrics import LyricsProvider, parse_lrc
+from .recommend import OpportunityWatcher, Recommender
 from .tools import DJTools
 
 
@@ -67,6 +70,9 @@ _DEMO = [
     (7, "Paper Lanterns", "Summer Radio", "Pop", 118.0, "8B", 205.0, 0.15,
      "[00:15.00]Turn the summer radio up\n[00:45.00]We sing along\n"),
     (8, "Robot Choir", "Robot Heart", "Techno", 130.0, "8A", 400.0, 0.00, ""),
+    (9, "Demo Crew", "Money On The Line", "Hip-Hop", 140.0, "5A", 185.0, 0.30,
+     "[00:12.00]Money on the line, money on the line\n[00:19.00]Every single time\n"
+     "[00:26.00]Money on the line, yeah we shine\n"),
 ]
 
 
@@ -95,11 +101,16 @@ class Runtime:
     backend: Backend
     dj: DJ
     tools: DJTools
+    watch: bool = True
 
     async def start(self) -> None:
         await self.backend.start()
+        if self.watch and self.tools.watcher:
+            self.tools.watcher.start()
 
     async def close(self) -> None:
+        if self.tools.watcher:
+            await self.tools.watcher.stop()
         self.tools.jobs.cancel()
         await self.backend.close()
 
@@ -111,6 +122,7 @@ def build_runtime(
     lyrics_dir: str | None = None,
     time_scale: float = 1.0,
     use_whisper: bool | None = None,
+    watch: bool | None = None,
 ) -> Runtime:
     backend = backend or os.environ.get("DJPLUSAI_BACKEND", "midi")
     lyrics_dir = lyrics_dir or os.environ.get("DJPLUSAI_LYRICS_DIR")
@@ -139,4 +151,8 @@ def build_runtime(
     else:
         raise ValueError("backend must be 'midi' or 'sim'")
     dj = DJ(be, library, lyrics, use_whisper=use_whisper)
-    return Runtime(be, dj, DJTools(dj))
+    analyzer = Analyzer(cache_dir() / "analysis") if analysis_available() else None
+    rec = Recommender(dj, analyzer)
+    if watch is None:
+        watch = os.environ.get("DJPLUSAI_WATCH", "1") not in ("0", "false", "")
+    return Runtime(be, dj, DJTools(dj, recommender=rec, watcher=OpportunityWatcher(rec)), watch)

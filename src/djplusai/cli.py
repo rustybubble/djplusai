@@ -36,6 +36,16 @@ async def _chat(a: argparse.Namespace) -> int:
     rt = build_runtime(**_runtime_kwargs(a))
     await rt.start()
     agent = ClaudeDJ(rt.tools, model=a.model, effort=a.effort)
+    if rt.tools.watcher:
+        # Surface in-the-moment wordplay and transition chances as they come up.
+        rt.tools.watcher.listeners.append(
+            lambda idea: print(
+                f"\n  * in {idea.in_s:.0f}s: {idea.name} into {idea.incoming.display}. {idea.why}"
+                f"\n    (say 'do it' or run idea {idea.id})\nyou> ",
+                end="",
+                flush=True,
+            )
+        )
     print(f"DJ+AI ({rt.backend.name}, model {agent.model}). Tell me what you want to hear. Ctrl-D to quit.")
     try:
         while True:

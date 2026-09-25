@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Any
+from urllib.parse import quote_plus
 
 from . import music
 from .backends.base import Backend, MixxxError, deck_group, eq_group, quick_effect_group
@@ -11,6 +13,27 @@ from .library import Library, Track, normalize
 from .lyrics import LyricHit, LyricsProvider, find_phrase, refine_with_whisper
 
 EQ_BANDS = {"low": 1, "mid": 2, "high": 3}
+
+
+class TrackNotFound(MixxxError):
+    """The requested song is not in the user's Mixxx library."""
+
+    def __init__(self, query: str) -> None:
+        self.query = query
+        super().__init__(
+            f"'{query}' is not in your Mixxx library. Add the file to one of Mixxx's library folders, "
+            "run Library > Rescan in Mixxx, then call reload_library."
+        )
+
+    def where_to_get_it(self) -> dict[str, str]:
+        q = quote_plus(self.query)
+        return {
+            "bandcamp": f"https://bandcamp.com/search?q={q}",
+            "beatport": f"https://www.beatport.com/search?q={q}",
+            "apple_music": f"https://music.apple.com/us/search?term={q}",
+            "amazon_music": f"https://www.amazon.com/s?k={q}&i=digital-music",
+            "spotify": f"https://open.spotify.com/search/{quote_plus(self.query).replace('+', '%20')}",
+        }
 
 
 class DJ:
@@ -90,8 +113,27 @@ class DJ:
             raise MixxxError("give a search query or a track_id")
         hits = self.library.search(query, limit=3)
         if not hits:
-            raise MixxxError(f"nothing in the Mixxx library matches '{query}'")
+            raise TrackNotFound(query)
         return hits[0][0]
+
+    def reload_library(self) -> int:
+        reload = getattr(self.library, "reload", None)
+        if reload is not None:
+            reload()
+        return len(self.library.all())
+
+    async def lyrics_summary(self, track: Track, wait: float = 3.0) -> str:
+        """Fetch lyrics (in the background if slow) and say what we have."""
+        task = asyncio.ensure_future(self.lyrics.get(track))
+        try:
+            lyr = await asyncio.wait_for(asyncio.shield(task), wait)
+        except asyncio.TimeoutError:
+            return "fetching in the background"
+        except Exception:
+            return "lookup failed"
+        if lyr is None:
+            return "none found"
+        return f"{'time-synced' if lyr.synced else 'unsynced'} ({len(lyr.lines)} lines, {lyr.source})"
 
     async def load(self, deck: int, query: str | None = None, track_id: int | None = None, play: bool = False) -> dict[str, Any]:
         deck = self.check_deck(deck)
@@ -110,6 +152,7 @@ class DJ:
             )
             if play:
                 await self.backend.set(g, "play", 1)
+            out["lyrics"] = await self.lyrics_summary(track)
             alternatives = [x for x in self.find_tracks(query or track.display, limit=4) if x["id"] != track.id]
             if alternatives:
                 out["other_matches"] = alternatives[:3]
@@ -362,6 +405,18 @@ class DJ:
         remaining = (1.0 - d.v("beat_distance")) * period + (every - 1) * period
         await self.backend.sleep(remaining)
         return True
+
+    async def wait_for_next_phrase(self, deck: int, beats: int = 32, timeout: float = 120) -> bool:
+        """Wait for the next phrase boundary (``beats`` beats counted from the track's first beat)."""
+        d = self.deck_state(deck)
+        b = self.backend
+        anchor = d.beat_anchor()
+        if anchor is None or d.v("loop_enabled") > 0.5:
+            return await self.wait_for_next_beat(deck, every=4)
+        last_beat, period = anchor
+        first = last_beat % period
+        target = first + math.ceil((d.position(b.now()) - first) / (beats * period) + 1e-6) * beats * period
+        return await b.wait_until(lambda: d.position(b.now()) >= target - 0.01, timeout)
 
     async def wait_for_loop(self, deck: int, active: bool = True, timeout: float = 900) -> bool:
         d = self.deck_state(deck)

@@ -96,6 +96,7 @@ class SimBackend(Backend):
         self._task: asyncio.Task[None] | None = None
         self._last = 0.0
         self._sync_counter = 0
+        self._stopping: dict[int, dict[str, float]] = {}  # deck -> brake/spinback in progress
         self.log: list[tuple[float, str, str, float]] = []  # (time, group, key, value) of every set
 
     # --- lifecycle -----------------------------------------------------
@@ -132,6 +133,14 @@ class SimBackend(Backend):
         self._step_ramps(now)
         for d in self.decks.values():
             if not d.playing or not d.track:
+                continue
+            stop = self._stopping.get(d.n)
+            if stop is not None:
+                if now >= stop["until"]:
+                    d.playing, d.speed = False, stop["speed"]
+                    del self._stopping[d.n]
+                    continue
+                d.pos = max(0.0, d.pos + dt * stop["rate"])
                 continue
             leader = self._leader(exclude=d.n)
             if d.sync and leader is not None:
@@ -428,6 +437,19 @@ class SimBackend(Backend):
             g = msg.get("g")
             for key in [k for k in self._ramps if not g or g in k[0]]:
                 del self._ramps[key]
+            return None
+        if op in ("brake", "spinback"):
+            d = self.decks[int(msg["n"])]
+            if msg.get("on", True) and d.playing:
+                factor = float(msg.get("factor") or (1.0 if op == "brake" else 1.8))
+                # Brake: coast forward while slowing; spinback: whip backwards, then stop.
+                self._stopping[d.n] = {
+                    "until": self.now() + (1.2 / factor if op == "brake" else 0.9),
+                    "rate": 0.5 * d.speed if op == "brake" else -3.0,
+                    "speed": d.speed,
+                }
+            elif not msg.get("on", True):
+                self._stopping.pop(d.n, None)
             return None
         if op == "state":
             return {
