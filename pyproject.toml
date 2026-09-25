@@ -24,9 +24,12 @@ agent = ["anthropic>=1.0"]
 keyboard = ["pynput>=1.7"]
 # Energy, intro/outro, drops and breakdowns from the audio (plus ffmpeg for non-WAV files).
 analysis = ["numpy>=1.24"]
+# Add tracks from YouTube as 320 kbps MP3s (plus ffmpeg as a system dependency).
+# pydub needs audioop, which left the standard library in Python 3.13.
+youtube = ["yt-dlp>=2024.1.0", "pydub>=0.25.1", "audioop-lts>=0.2.1; python_version >= '3.13'"]
 # Word-accurate lyric timing from the audio itself.
 align = ["faster-whisper>=1.0"]
-all = ["djplusai[midi,mcp,agent,keyboard,analysis]"]
+all = ["djplusai[midi,mcp,agent,keyboard,analysis,youtube]"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [project.scripts]

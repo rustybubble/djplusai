@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import unicodedata
@@ -91,6 +92,27 @@ class Library:
     def get(self, track_id: int) -> Track | None:
         return self._tracks.get(track_id)
 
+    def find_by_location(self, path: str | Path) -> Track | None:
+        """The library track stored at ``path``, if any."""
+        path = os.path.expanduser(str(path))
+        targets = {_path_key(path), _path_key(os.path.realpath(path))}
+        for t in self.all():
+            if t.location and _path_key(t.location) in targets:
+                return t
+        return None
+
+    def add_file(self, path: str | Path, artist: str, title: str, duration: float = 0.0) -> Track | None:
+        """Make a new audio file loadable. An in-memory library can take it directly."""
+        track = Track(
+            id=max(self._tracks, default=0) + 1,
+            artist=artist,
+            title=title,
+            location=str(path),
+            duration=duration,
+        )
+        self._tracks[track.id] = track
+        return track
+
     def search(self, query: str, limit: int = 10, min_score: float = 55.0) -> list[tuple[Track, float]]:
         scored = [(t, score(query, t)) for t in self.all()]
         scored = [x for x in scored if x[1] >= min_score]
@@ -132,6 +154,10 @@ class MixxxLibrary(Library):
         super().__init__()
         self.reload()
 
+    def add_file(self, path: str | Path, artist: str, title: str, duration: float = 0.0) -> Track | None:
+        # Mixxx can only load tracks it has scanned itself; see reload().
+        return None
+
     def reload(self) -> None:
         uri = f"file:{self.db_path}?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=5) as conn:
@@ -157,3 +183,7 @@ class MixxxLibrary(Library):
                 )
             )
         self._tracks = {t.id: t for t in tracks}
+
+
+def _path_key(path: str) -> str:
+    return os.path.normcase(os.path.normpath(path))
